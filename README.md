@@ -1,155 +1,145 @@
-# Disposable Email — Disposable Inbox Service
+# 📧 TempMail - Disposable Email Service
 
-Generate temporary email addresses that auto-expire. Temp-mail style, self-hosted.
+Layanan email temporary yang bisa menerima email dari Gmail/Outlook/layanan email lainnya. Auto-expire inbox, ganti domain dari UI, deploy lokal (development) atau VPS (production).
 
-## Architecture
+## 🚀 Live Demo
+
+**http://175.41.160.250** (VPS Production)
+
+## ✨ Fitur
+
+- **Generate inbox** — alamat email random `xxx@kstarid.cloud`
+- **Terima email nyata** — dari Gmail, Outlook, dll
+- **Auto-expire** — inbox hilang setelah 60 menit
+- **Copy button** — dengan fallback untuk HTTP
+- **Auto-refresh** — inbox update setiap 5 detik
+- **Ganti domain** — dari UI Settings panel
+- **Delete inbox** — hapus manual
+
+## 🏗️ Architecture
 
 ```
-Internet  ──►  Postfix SMTP (port 25/1025)
-                    │
-                    │ catch-all *@kstarid.cloud → local user "tempmail"
-                    ▼
-              mailbox_command
-                    │
-                    ▼
-              Python catcher.py (reads stdin, parses email)
-                    │
-                    │ HTTP POST /api/internal/incoming
-                    ▼
-              FastAPI backend ──► SQLite (./data/tempmail.db)
-                    │
-                    │ /api/inbox/{addr}/messages
-                    ▼
-              Next.js frontend (port 3000)
+Internet (Gmail/Outlook)
+        ↓ MX record → VPS
+   Postfix (port 25)
+        ↓ catch-all → catcher.py
+   FastAPI Backend (port 8000)
+        ↓ SQLite database
+   Static HTML Frontend (nginx port 80)
 ```
 
-## Quick Start (Local Development)
+## 📦 Local Development (Docker)
 
 ```bash
-# Start all services
-docker compose up -d --build
-
-# Open UI
-start http://localhost:3000
-
-# Check logs
-docker compose logs -f postfix
-docker compose logs -f backend
+git clone https://github.com/KStarID/tempmail-disposable-email.git
+cd tempmail-disposable-email
+docker compose up -d
 ```
 
-### Send a test email (from inside Docker network)
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:8000
+- SMTP: localhost:1025
+
+> ⚠️ Local tidak bisa terima email dari internet (di belakang NAT). Hanya untuk development/testing.
+
+## 🌐 Production Deployment (VPS)
+
+### Prerequisites
+- VPS Ubuntu 22.04+ dengan public IP
+- Domain + DNS MX record pointing ke VPS
+
+### Steps
 
 ```bash
-# Get an inbox first
-curl -X POST http://localhost:8000/api/inbox/create
-# Returns: {"id":1,"address":"abc123@kstarid.cloud",...}
+# 1. Install dependencies
+sudo apt update && sudo apt install -y postfix python3-pip nginx
 
-# Send test email via SMTP (using Python or telnet)
-docker compose exec postfix bash -c '
-  apt-get update && apt-get install -y msmtp
-  # ... or use python
-'
+# 2. Install Python packages
+pip3 install fastapi uvicorn sqlalchemy aiosqlite python-multipart
+
+# 3. Clone repo
+git clone https://github.com/KStarID/tempmail-disposable-email.git /opt/tempmail
+cd /opt/tempmail
+
+# 4. Create database directory
+mkdir -p /opt/tempmail/data
+
+# 5. Configure Postfix
+sudo postconf -e 'myhostname=mail.yourdomain.com'
+sudo postconf -e 'mydomain=yourdomain.com'
+sudo postconf -e 'virtual_alias_maps=regexp:/etc/postfix/virtual_regexp'
+sudo postconf -e 'mailbox_command=/usr/local/bin/catcher.py'
+sudo postconf -e 'local_recipient_maps='
+sudo postconf -e 'maillog_file=/var/log/mail.log'
+echo '/^(.+)@yourdomain.com$/  tempmail' | sudo tee /etc/postfix/virtual_regexp
+sudo systemctl restart postfix
+
+# 6. Configure nginx
+echo 'server { listen 80; location / { proxy_pass http://127.0.0.1:8000; } }' | sudo tee /etc/nginx/sites-available/tempmail
+sudo ln -sf /etc/nginx/sites-available/tempmail /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo systemctl restart nginx
+
+# 7. Start backend with PM2
+cd /opt/tempmail/backend
+pm2 start uvicorn --name tempmail-backend -- app.main:app --host 0.0.0.0 --port 8000
+pm2 save
+
+# 8. Set DNS MX record
+# Type: MX, Name: @, Value: mail.yourdomain.com, Priority: 10
+# Type: A, Name: mail, Value: <your-vps-ip>
 ```
 
-Easiest: use Python:
-```python
-import smtplib
-from email.message import EmailMessage
+### DNS Records Required
 
-msg = EmailMessage()
-msg["From"] = "test@gmail.com"
-msg["To"] = "abc123@kstarid.cloud"
-msg["Subject"] = "Hello from test"
-msg.set_content("This is a test message body")
+| Type | Name | Value | Priority |
+|------|------|-------|----------|
+| A | mail | `<your-vps-ip>` | - |
+| MX | @ | mail.yourdomain.com | 10 |
+| TXT | @ | `v=spf1 mx ~all` | - |
+| TXT | _dmarc | `v=DMARC1; p=quarantine` | - |
 
-with smtplib.SMTP("localhost", 1025) as s:
-    s.send_message(msg)
-```
-
-Then refresh the UI — message appears within 5 seconds.
-
-## Services & Ports
-
-| Service | Port (host) | Description |
-|---------|-------------|-------------|
-| Frontend | 3000 | Next.js UI |
-| Backend | 8000 | FastAPI REST API + OpenAPI docs at `/docs` |
-| SMTP | 1025 | Postfix SMTP (mapped from container port 25) |
-
-## Project Structure
+## 📁 Project Structure
 
 ```
-disposable-email/
-├── docker-compose.yml          # Orchestrates all services
-├── data/                       # SQLite DB persisted here
-├── mail-server/
-│   ├── postfix/                # Custom Postfix image with catch-all
-│   │   ├── Dockerfile          # Builds boky/postfix + our configs
-│   │   ├── main.cf             # Postfix config (catch-all routing)
-│   │   ├── master.cf           # Postfix services (smtp, local, virtual)
-│   │   └── virtual_regexp      # Catch-all pattern: *@kstarid.cloud
-│   └── catcher/catcher.py      # Receives email from Postfix stdin
-├── backend/                    # FastAPI app
+├── backend/
+│   ├── app/
+│   │   ├── main.py          # FastAPI entry point
+│   │   ├── database.py      # SQLite async engine
+│   │   ├── models.py        # SQLAlchemy models + Pydantic schemas
+│   │   ├── services.py      # Business logic (generate address, store messages)
+│   │   └── routes.py        # API routes + domain settings
+│   ├── static/
+│   │   └── index.html       # Single-page frontend (no build needed)
 │   ├── Dockerfile
-│   ├── requirements.txt
-│   └── app/
-│       ├── main.py             # FastAPI entry
-│       ├── routes.py           # All API endpoints
-│       ├── services.py         # Business logic
-│       ├── models.py           # SQLModel DB models
-│       └── database.py         # SQLite engine + init
-└── frontend/                   # Next.js UI
-    ├── Dockerfile
-    ├── package.json
-    └── app/
-        ├── page.tsx            # Main temp-mail UI
-        ├── layout.tsx
-        └── globals.css
+│   └── requirements.txt
+├── mail-server/
+│   ├── postfix/
+│   │   ├── main.cf          # Postfix configuration
+│   │   ├── master.cf        # Service definitions
+│   │   ├── virtual_regexp   # Catch-all email rule
+│   │   └── Dockerfile
+│   └── catcher/
+│       └── catcher.py       # Postfix → backend bridge
+├── frontend/                 # Next.js (local development only)
+├── docker-compose.yml
+└── README.md
 ```
 
-## API Endpoints
+## 🔧 API Endpoints
 
-### Public
-- `POST /api/inbox/create` — create random inbox
-- `GET  /api/inbox/{addr}` — get inbox details (refreshes expiry)
-- `GET  /api/inbox/{addr}/messages` — list messages
-- `GET  /api/inbox/{addr}/messages/{id}` — read full message
-- `DELETE /api/inbox/{addr}` — manually expire inbox
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/inbox/create` | Generate new inbox |
+| GET | `/api/inbox/{address}` | Get inbox info |
+| GET | `/api/inbox/{address}/messages` | List messages |
+| GET | `/api/inbox/{address}/messages/{id}` | Get message detail |
+| DELETE | `/api/inbox/{address}` | Delete inbox |
+| GET | `/api/settings/domain` | Get current domain |
+| POST | `/api/settings/domain` | Change domain |
+| POST | `/api/internal/incoming` | Inject email (testing) |
+| GET | `/api/health` | Health check |
 
-### Internal (called by catcher.py)
-- `POST /api/internal/incoming` — receive parsed email
-- `POST /api/internal/cleanup` — soft-delete expired inboxes
-
-## Environment Variables
-
-| Var | Default | Description |
-|-----|---------|-------------|
-| `DOMAIN` | `kstarid.cloud` | Catch-all domain |
-| `INBOX_TTL_MINUTES` | `60` | Inbox lifetime |
-| `DATABASE_URL` | `sqlite:////data/tempmail.db` | DB connection |
-
-## Production Deployment to VPS (TODO)
-
-When ready for production:
-1. Upgrade VPS to 4GB RAM minimum
-2. Verify port 25 inbound is open from VPS provider
-3. Set PTR record: `VPS_IP → mail.kstarid.cloud` (HPanel: tidak bisa; minta provider)
-4. Configure DNS at HPanel:
-   - `A    mail.kstarid.cloud → VPS_IP`
-   - `MX   kstarid.cloud → 10 mail.kstarid.cloud`
-   - `TXT  kstarid.cloud → "v=spf1 mx ~all"`
-5. Add Let's Encrypt SSL for SMTP
-6. Remove `mynetworks` whitelist in main.cf (lock down to docker network only)
-7. Add rate limiting + DKIM signing
-
-## Limitations (Dev Mode)
-
-- Port 25 inbound from internet NOT tested (VPS limitation)
-- No anti-spam (Rspamd/ClamAV)
-- No SSL/TLS for SMTP (uses snakeoil cert)
-- No rate limiting
-- Catch-all means anyone can use random addresses — could attract abuse
-
-## License
+## 📝 License
 
 MIT
