@@ -1,0 +1,75 @@
+# ============================================================
+# Postfix main.cf - Disposable Email Service (FIXED)
+# ============================================================
+# Strategy: virtual_alias_maps catch-all rewrites *@kstarid.cloud
+# to local user "tempmail", then local transport delivers via
+# mailbox_command (catcher.py) which POSTs to backend API.
+
+# ---- Network & hostname ----
+myhostname = mail.kstarid.cloud
+mydomain = kstarid.cloud
+myorigin = $mydomain
+
+# IMPORTANT: kstarid.cloud is in mydestination for LOCAL delivery
+# Do NOT also put it in virtual_alias_domains (causes conflict)
+mydestination = $myhostname, localhost.$mydomain, localhost, $mydomain
+
+inet_interfaces = all
+inet_protocols = all
+
+# ---- Trust ----
+mynetworks = 127.0.0.0/8, 172.16.0.0/12, 10.0.0.0/8, 192.168.0.0/16
+
+# ---- Queue ----
+queue_directory = /var/spool/postfix
+data_directory = /var/lib/postfix
+
+# ---- Catch-all: redirect ANY *@kstarid.cloud to local user "tempmail" ----
+# Since kstarid.cloud is in mydestination, we use local_recipient_maps
+# to accept all addresses, and alias_maps to rewrite them.
+virtual_alias_maps = regexp:/etc/postfix/virtual_regexp
+# DO NOT set virtual_alias_domains when domain is in mydestination
+
+# Accept mail for any local-part (disable local recipient checking)
+local_recipient_maps =
+
+# ---- Alias maps: use ONLY hash, no NIS ----
+alias_maps = hash:/etc/aliases
+alias_database = hash:/etc/aliases
+
+# ---- Local delivery: pipe to Python catcher script ----
+mailbox_command = /usr/local/bin/catcher.py
+mailbox_transport_maps =
+fallback_transport =
+
+# ---- TLS ----
+smtpd_tls_cert_file = /etc/ssl/certs/ssl-cert-snakeoil.pem
+smtpd_tls_key_file = /etc/ssl/private/ssl-cert-snakeoil.key
+smtpd_tls_security_level = may
+smtp_tls_security_level = may
+
+# ---- Limits ----
+message_size_limit = 10485760
+mailbox_size_limit = 0
+smtpd_recipient_limit = 100
+
+# ---- Disable SMTP auth (dev only) ----
+smtpd_sasl_auth_enable = no
+smtpd_sasl_security_options = noanonymous
+
+# ---- Anti-spam soft ----
+smtpd_helo_required = yes
+smtpd_helo_restrictions = permit_mynetworks, reject_invalid_helo_hostname, permit
+smtpd_sender_restrictions = permit_mynetworks, reject_non_fqdn_sender, permit
+smtpd_recipient_restrictions =
+  permit_mynetworks,
+  reject_non_fqdn_recipient,
+  reject_unknown_recipient_domain,
+  reject_unauth_destination,
+  permit
+
+# ---- Compatibility ----
+compatibility_level = 3.6
+
+# ---- Logging ----
+maillog_file = /var/log/mail.log

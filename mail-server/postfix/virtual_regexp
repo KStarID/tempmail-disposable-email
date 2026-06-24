@@ -1,0 +1,7 @@
+# ============================================================
+# Postfix virtual_regexp - Catch-all alias
+# ============================================================
+# Match ANY local-part before @kstarid.cloud, alias to local user
+# Result: random123@kstarid.cloud → tempmail (local) → mailbox_command
+
+/^(.+)@kstarid\.cloud$/  tempmail

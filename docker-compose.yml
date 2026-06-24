@@ -1,0 +1,93 @@
+version: "3.9"
+
+# ============================================================
+# Disposable Email Service - Local Development Stack
+# ============================================================
+# Stack:
+#   - postfix      : SMTP server (catch-all, no auth needed for dev)
+#   - catcher      : Python script that reads email from stdin
+#                    (spawned by Postfix via pipe transport)
+#   - backend      : FastAPI REST API (port 8000)
+#   - frontend     : Next.js UI (port 3000)
+#
+# Notes:
+#   - SMTPD listens on host port 1025 to avoid Windows port 25 conflicts
+#   - In dev, "domain" is kstarid.cloud (matches production target)
+#   - All services share a Docker network called `mailnet`
+#   - SQLite file lives in ./data/tempmail.db (persisted on host)
+# ============================================================
+
+services:
+  # ----------------------------------------------------------
+  # SMTP Server - Postfix with catch-all + pipe to catcher
+  # ----------------------------------------------------------
+  postfix:
+    build:
+      context: ./mail-server
+      dockerfile: postfix/Dockerfile
+    container_name: tempmail-postfix
+    hostname: mail.kstarid.cloud
+    domainname: kstarid.cloud
+    environment:
+      # Used by catcher.py to know where to POST
+      BACKEND_URL: "http://backend:8000"
+      # Disable image default entrypoint script that would overwrite main.cf
+      ALLOW_SENDING: "false"
+      SMTPD_AUTH: "false"
+    networks:
+      mailnet:
+        ipv4_address: 172.20.0.10
+    ports:
+      # External SMTP port 1025 (avoid Windows port 25)
+      - "1025:25"
+    restart: unless-stopped
+    # healthcheck: disabled — SMTP banner issue, needs dedicated debug session
+
+  # ----------------------------------------------------------
+  # Backend API - FastAPI
+  # ----------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tempmail-backend
+    environment:
+      DATABASE_URL: "sqlite:////data/tempmail.db"
+      DOMAIN: "kstarid.cloud"
+      INBOX_TTL_MINUTES: "60"
+      CORS_ORIGINS: "http://localhost:3000"
+    volumes:
+      - ./data:/data
+    networks:
+      - mailnet
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postfix
+    restart: unless-stopped
+
+  # ----------------------------------------------------------
+  # Frontend - Next.js
+  # ----------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: tempmail-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: "http://localhost:8000"
+      API_INTERNAL_URL: "http://backend:8000"
+    networks:
+      - mailnet
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+networks:
+  mailnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24

@@ -1,0 +1,48 @@
+# ============================================================
+# Postfix master.cf - Disposable Email Service
+# ============================================================
+# Minimal services needed for receive-only catch-all
+
+# ---- SMTP inbound (port 25 internal) ----
+smtp      inet  n       -       n       -       -       smtpd
+  -o smtpd_client_connection_count_limit=10
+
+# ---- Local pickup from maildrop / pipe ----
+pickup    unix  n       -       n       60      1       pickup
+cleanup   unix  n       -       n       -       0       cleanup
+qmgr      unix  n       -       n       300     1       qmgr
+
+# ---- Logging & postlog ----
+postlog   unix-dgram n  -       n       -       1       postlogd
+tlsmgr    unix  -       -       n       1000?   1       tlsmgr
+rewrite   unix  -       -       n       -       -       trivial-rewrite
+bounce    unix  -       -       n       -       0       bounce
+defer     unix  -       -       n       -       0       bounce
+trace     unix  -       -       n       -       0       bounce
+verify    unix  -       -       n       -       1       verify
+flush     unix  n       -       n       1000?   0       flush
+
+# ---- Lookup services ----
+proxymap  unix  -       -       n       -       -       proxymap
+proxywrite unix -       -       n       -       1       proxymap
+
+# ---- Outbound (disabled in dev) ----
+smtp      unix  -       -       n       -       -       smtp
+relay     unix  -       -       n       -       -       smtp
+
+# ---- Diagnostics ----
+showq     unix  n       -       n       -       -       showq
+error     unix  -       -       n       -       -       error
+retry     unix  -       -       n       -       -       error
+discard   unix  -       -       n       -       -       discard
+
+# ---- Local delivery (uses mailbox_command from main.cf) ----
+local     unix  -       n       n       -       -       local
+
+# ---- Virtual (handles virtual_alias_maps) ----
+virtual   unix  -       n       n       -       -       virtual
+
+# ---- Other ----
+lmtp      unix  -       -       n       -       -       lmtp
+anvil     unix  -       -       n       -       1       anvil
+scache    unix  -       -       n       -       1       scache
